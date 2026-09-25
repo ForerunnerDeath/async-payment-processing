@@ -45,6 +45,11 @@ class Settings(BaseSettings):
     payment_provider_retry_max_delay_seconds: float = Field(default=1.0, ge=0)
     payment_provider_retry_total_timeout_seconds: float = Field(default=10.0, gt=0)
 
+    payment_provider_circuit_breaker_failure_threshold: int = Field(default=5, ge=1)
+    payment_provider_circuit_breaker_recovery_timeout_seconds: float = Field(default=15.0, ge=0)
+
+    webhook_request_timeout_seconds: float = Field(default=5.0, gt=0)
+
 
 @lru_cache
 def get_settings() -> Settings:

@@ -39,6 +39,9 @@ async def test_run_worker_starts_and_stops_resources(
     async def close_database() -> None:
         order.append("database_closed")
 
+    async def connect_broker() -> None:
+        order.append("broker_connected")
+
     database = MagicMock()
     database.session_factory = MagicMock()
     database.check_connection = AsyncMock(
@@ -49,6 +52,9 @@ async def test_run_worker_starts_and_stops_resources(
     )
 
     broker = MagicMock()
+    broker.connect = AsyncMock(
+        side_effect=connect_broker,
+    )
     broker.start = AsyncMock(
         side_effect=start_broker,
     )
@@ -96,16 +102,18 @@ async def test_run_worker_starts_and_stops_resources(
             return_value=relay,
         ) as relay_class,
         patch(
-            "app.worker.main.structlog.get_logger",
-            return_value=logger,
+            "app.worker.main.logger",
+            logger,
         ),
+        patch("app.worker.main.register_payment_queue_subscriber"),
     ):
         await run_worker(shutdown_event)
 
     assert order == [
         "database_checked",
-        "broker_started",
+        "broker_connected",
         "topology_declared",
+        "broker_started",
         "relay_started",
         "relay_stopped",
         "broker_stopped",
@@ -141,7 +149,6 @@ async def test_run_worker_starts_and_stops_resources(
     logger.info.assert_any_call(
         "worker_started",
         worker=WORKER_NAME,
-        environment=settings.environment,
     )
 
     logger.info.assert_any_call(
@@ -161,6 +168,7 @@ async def test_run_worker_closes_database_when_broker_start_fails(
     database.close = AsyncMock()
 
     broker = MagicMock()
+    broker.connect = AsyncMock()
     broker.start = AsyncMock(
         side_effect=RuntimeError("RabbitMQ unavailable"),
     )
@@ -171,7 +179,9 @@ async def test_run_worker_closes_database_when_broker_start_fails(
             "app.worker.main.get_settings",
             return_value=settings,
         ),
-        patch("app.worker.main.configure_logging"),
+        patch(
+            "app.worker.main.configure_logging",
+        ),
         patch(
             "app.worker.main.Database",
             return_value=database,
@@ -180,9 +190,23 @@ async def test_run_worker_closes_database_when_broker_start_fails(
             "app.worker.main.create_rabbit_broker",
             return_value=broker,
         ),
-        patch("app.worker.main.RabbitEventPublisher"),
-        patch("app.worker.main.OutboxRelay"),
-        patch("app.worker.main.structlog.get_logger"),
+        patch(
+            "app.worker.main.declare_rabbitmq_topology",
+            new=AsyncMock(),
+        ),
+        patch(
+            "app.worker.main.RabbitEventPublisher",
+        ),
+        patch(
+            "app.worker.main.OutboxRelay",
+        ),
+        patch(
+            "app.worker.main.register_payment_queue_subscriber",
+        ),
+        patch(
+            "app.worker.main.logger",
+            MagicMock(),
+        ),
         pytest.raises(
             RuntimeError,
             match="RabbitMQ unavailable",
@@ -190,5 +214,5 @@ async def test_run_worker_closes_database_when_broker_start_fails(
     ):
         await run_worker(shutdown_event)
 
-    broker.stop.assert_not_awaited()
+    broker.stop.assert_awaited_once_with()
     database.close.assert_awaited_once_with()

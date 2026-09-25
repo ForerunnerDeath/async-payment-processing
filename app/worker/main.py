@@ -1,18 +1,28 @@
 import asyncio
 import signal
+from contextlib import suppress
 from types import FrameType
 
+import httpx
 import structlog
 
+from app.clients.payment_provider import PaymentProviderClient
+from app.clients.webhook import WebhookClient
 from app.core.config import get_settings
 from app.core.database import Database
 from app.core.logging import configure_logging
-from app.integrations.rabbitmq import (
-    RabbitEventPublisher,
-    create_rabbit_broker,
-    declare_rabbitmq_topology,
-)
+from app.integrations.rabbitmq.broker import create_rabbit_broker
+from app.integrations.rabbitmq.declaration import declare_rabbitmq_topology
+from app.integrations.rabbitmq.publisher import RabbitEventPublisher
+from app.resilience.circuit_breaker import CircuitBreaker
 from app.services.outbox_relay import OutboxRelay
+from app.worker.consumer import PaymentQueueConsumer
+from app.worker.dispatcher import WorkerEventDispatcher
+from app.worker.payment_processor import PaymentEventProcessor
+from app.worker.subscriber import register_payment_queue_subscriber
+from app.worker.webhook_processor import WebhookEventProcessor
+
+logger = structlog.get_logger()
 
 WORKER_NAME = "async-payment-processing-worker"
 
@@ -22,46 +32,103 @@ async def run_worker(shutdown_event: asyncio.Event) -> None:
 
     configure_logging(settings.log_level)
 
-    logger = structlog.get_logger()
-
     database = Database(settings)
+
     broker = create_rabbit_broker(settings)
+
+    provider_http_client = httpx.AsyncClient(
+        base_url=str(settings.payment_provider_url),
+        timeout=settings.payment_provider_request_timeout_seconds,
+    )
+
+    webhook_http_client = httpx.AsyncClient()
 
     publisher = RabbitEventPublisher(
         broker,
         timeout_seconds=settings.rabbit_publish_timeout_seconds,
     )
 
+    provider_client = PaymentProviderClient(
+        provider_http_client,
+        request_timeout_seconds=(settings.payment_provider_request_timeout_seconds),
+        max_attempts=settings.payment_provider_max_attempts,
+        retry_base_delay_seconds=(settings.payment_provider_retry_base_delay_seconds),
+        retry_max_delay_seconds=(settings.payment_provider_retry_max_delay_seconds),
+        retry_total_timeout_seconds=(settings.payment_provider_retry_total_timeout_seconds),
+    )
+
+    circuit_breaker = CircuitBreaker(
+        failure_threshold=(settings.payment_provider_circuit_breaker_failure_threshold),
+        recovery_timeout_seconds=(
+            settings.payment_provider_circuit_breaker_recovery_timeout_seconds
+        ),
+    )
+
+    webhook_client = WebhookClient(
+        webhook_http_client,
+        timeout_seconds=settings.webhook_request_timeout_seconds,
+    )
+
+    payment_processor = PaymentEventProcessor(
+        session_factory=database.session_factory,
+        provider_client=provider_client,
+        circuit_breaker=circuit_breaker,
+    )
+
+    webhook_processor = WebhookEventProcessor(
+        session_factory=database.session_factory,
+        webhook_client=webhook_client,
+    )
+
+    dispatcher = WorkerEventDispatcher(
+        payment_processor=payment_processor,
+        webhook_processor=webhook_processor,
+    )
+
+    consumer = PaymentQueueConsumer(
+        processor=dispatcher,
+        publisher=publisher,
+    )
+
+    register_payment_queue_subscriber(
+        broker,
+        consumer,
+    )
+
     outbox_relay = OutboxRelay(
         session_factory=database.session_factory,
         publisher=publisher,
         batch_size=settings.outbox_relay_batch_size,
-        poll_interval_seconds=settings.outbox_relay_poll_interval_seconds,
+        poll_interval_seconds=(settings.outbox_relay_poll_interval_seconds),
     )
 
     outbox_stop_event = asyncio.Event()
     outbox_task: asyncio.Task[None] | None = None
+
+    broker_connected = False
     broker_started = False
 
     try:
         await database.check_connection()
 
-        await broker.start()
-        broker_started = True
+        await broker.connect()
+        broker_connected = True
 
         await declare_rabbitmq_topology(broker)
 
+        await broker.start()
+        broker_started = True
+
         outbox_task = asyncio.create_task(
             outbox_relay.run(outbox_stop_event),
-            name="outbox_relay",
+            name="outbox-relay",
         )
 
-        outbox_task.add_done_callback(lambda _task: shutdown_event.set())
+        outbox_task.add_done_callback(lambda _: shutdown_event.set())
 
         logger.info(
             "worker_started",
             worker=WORKER_NAME,
-            environment=settings.environment,
         )
 
         await shutdown_event.wait()
@@ -72,30 +139,31 @@ async def run_worker(shutdown_event: asyncio.Event) -> None:
     finally:
         outbox_stop_event.set()
 
-        try:
-            if outbox_task is not None and not outbox_task.done():
-                await outbox_task
-        finally:
-            try:
-                if broker_started:
-                    await broker.stop()
-            finally:
-                await database.close()
+        if outbox_task is not None and not outbox_task.done():
+            await outbox_task
 
-                logger.info(
-                    "worker_stopped",
-                    worker=WORKER_NAME,
-                )
+        if broker_started or broker_connected:
+            with suppress(Exception):
+                await broker.stop()
+
+        await provider_http_client.aclose()
+        await webhook_http_client.aclose()
+        await database.close()
+
+        logger.info(
+            "worker_stopped",
+            worker=WORKER_NAME,
+        )
 
 
 def install_signal_handlers(shutdown_event: asyncio.Event) -> None:
     loop = asyncio.get_running_loop()
 
-    def handle_shutdown(_signum: int, _frame: FrameType | None) -> None:
+    def handle_signal(_signum: int, _frame: FrameType | None) -> None:
         loop.call_soon_threadsafe(shutdown_event.set)
 
-    signal.signal(signal.SIGINT, handle_shutdown)
-    signal.signal(signal.SIGTERM, handle_shutdown)
+    signal.signal(signal.SIGINT, handle_signal)
+    signal.signal(signal.SIGTERM, handle_signal)
 
 
 async def worker_main() -> None:

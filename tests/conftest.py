@@ -16,5 +16,8 @@ def settings() -> Settings:
             "payment_provider_retry_base_delay_seconds": 0.2,
             "payment_provider_retry_max_delay_seconds": 1.0,
             "payment_provider_retry_total_timeout_seconds": 10.0,
+            "webhook_request_timeout_seconds": 5.0,
+            "payment_provider_circuit_breaker_failure_threshold": 5,
+            "payment_provider_circuit_breaker_recovery_timeout_seconds": 15.0,
         }
     )
