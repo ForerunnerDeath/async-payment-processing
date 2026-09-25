@@ -1,13 +1,43 @@
+x-app-environment: &app-environment
+  ENVIRONMENT: ${ENVIRONMENT:-local}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  API_KEY: ${API_KEY:-local-dev-api-key}
+
+  DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-payments}:${POSTGRES_PASSWORD:-payments}@postgres:5432/${POSTGRES_DB:-payments}
+  RABBITMQ_URL: amqp://${RABBITMQ_DEFAULT_USER:-guest}:${RABBITMQ_DEFAULT_PASS:-guest}@rabbitmq:5672/
+
+  OUTBOX_RELAY_BATCH_SIZE: ${OUTBOX_RELAY_BATCH_SIZE:-100}
+  OUTBOX_RELAY_POLL_INTERVAL_SECONDS: ${OUTBOX_RELAY_POLL_INTERVAL_SECONDS:-1}
+  RABBIT_PUBLISH_TIMEOUT_SECONDS: ${RABBIT_PUBLISH_TIMEOUT_SECONDS:-5}
+
+  PAYMENT_PROVIDER_URL: http://mock-provider:8001
+  PAYMENT_PROVIDER_REQUEST_TIMEOUT_SECONDS: ${PAYMENT_PROVIDER_REQUEST_TIMEOUT_SECONDS:-6}
+  PAYMENT_PROVIDER_MAX_ATTEMPTS: ${PAYMENT_PROVIDER_MAX_ATTEMPTS:-3}
+  PAYMENT_PROVIDER_RETRY_BASE_DELAY_SECONDS: ${PAYMENT_PROVIDER_RETRY_BASE_DELAY_SECONDS:-0.2}
+  PAYMENT_PROVIDER_RETRY_MAX_DELAY_SECONDS: ${PAYMENT_PROVIDER_RETRY_MAX_DELAY_SECONDS:-1}
+  PAYMENT_PROVIDER_RETRY_TOTAL_TIMEOUT_SECONDS: ${PAYMENT_PROVIDER_RETRY_TOTAL_TIMEOUT_SECONDS:-10}
+
+  PAYMENT_PROVIDER_CIRCUIT_BREAKER_FAILURE_THRESHOLD: ${PAYMENT_PROVIDER_CIRCUIT_BREAKER_FAILURE_THRESHOLD:-5}
+  PAYMENT_PROVIDER_CIRCUIT_BREAKER_RECOVERY_TIMEOUT_SECONDS: ${PAYMENT_PROVIDER_CIRCUIT_BREAKER_RECOVERY_TIMEOUT_SECONDS:-15}
+
+  WEBHOOK_REQUEST_TIMEOUT_SECONDS: ${WEBHOOK_REQUEST_TIMEOUT_SECONDS:-5}
+
+  PAYMENT_RECONCILIATION_BATCH_SIZE: ${PAYMENT_RECONCILIATION_BATCH_SIZE:-20}
+  PAYMENT_RECONCILIATION_STALE_AFTER_SECONDS: ${PAYMENT_RECONCILIATION_STALE_AFTER_SECONDS:-30}
+  PAYMENT_RECONCILIATION_POLL_INTERVAL_SECONDS: ${PAYMENT_RECONCILIATION_POLL_INTERVAL_SECONDS:-5}
+  PAYMENT_RECONCILIATION_LEASE_SECONDS: ${PAYMENT_RECONCILIATION_LEASE_SECONDS:-60}
+  PAYMENT_RECONCILIATION_MAX_ATTEMPTS: ${PAYMENT_RECONCILIATION_MAX_ATTEMPTS:-5}
+
 services:
   postgres:
     image: postgres:17-alpine
     container_name: async-payment-processing-postgres
     environment:
-      POSTGRES_DB: ${POSTGRES_DB}
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-payments}
+      POSTGRES_USER: ${POSTGRES_USER:-payments}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-payments}
     ports:
-      - "${POSTGRES_PORT}:5432"
+      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -18,17 +48,18 @@ services:
         ]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
       start_period: 5s
+
   rabbitmq:
-    image: rabbitmq:4.1.8-management-alpine
+    image: rabbitmq:4-management-alpine
     container_name: async-payment-processing-rabbitmq
     environment:
-      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER}
-      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS}
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:-guest}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:-guest}
     ports:
-      - "${RABBITMQ_PORT}:5672"
-      - "${RABBITMQ_MANAGEMENT_PORT}:15672"
+      - "${RABBITMQ_PORT:-5672}:5672"
+      - "${RABBITMQ_MANAGEMENT_PORT:-15672}:15672"
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
     healthcheck:
@@ -43,10 +74,12 @@ services:
       timeout: 5s
       retries: 10
       start_period: 10s
+
   mock-provider:
     build:
       context: ./mock-provider
       dockerfile: Dockerfile
+    image: async-payment-processing-mock-provider:dev
     container_name: async-payment-processing-mock-provider
     ports:
       - "${MOCK_PROVIDER_PORT:-8001}:8001"
@@ -60,8 +93,80 @@ services:
         ]
       interval: 5s
       timeout: 3s
-      retries: 5
+      retries: 10
       start_period: 5s
+
+  migrations:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: async-payment-processing:dev
+    container_name: async-payment-processing-migrations
+    environment: *app-environment
+    command:
+      [
+        "alembic",
+        "upgrade",
+        "head",
+      ]
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    image: async-payment-processing:dev
+    container_name: async-payment-processing-api
+    environment: *app-environment
+    command:
+      [
+        "python",
+        "-m",
+        "uvicorn",
+        "app.main:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000",
+      ]
+    ports:
+      - "${API_PORT:-8000}:8000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import os, urllib.request; req=urllib.request.Request('http://127.0.0.1:8000/health/ready', headers={'X-API-Key': os.environ['API_KEY']}); urllib.request.urlopen(req, timeout=3)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrations:
+        condition: service_completed_successfully
+
+  consumer:
+    image: async-payment-processing:dev
+    container_name: async-payment-processing-consumer
+    environment: *app-environment
+    command:
+      [
+        "python",
+        "-m",
+        "app.worker.main",
+      ]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      migrations:
+        condition: service_completed_successfully
+
 volumes:
   postgres_data:
   rabbitmq_data:
