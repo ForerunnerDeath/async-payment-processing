@@ -16,6 +16,7 @@ from app.integrations.rabbitmq.declaration import declare_rabbitmq_topology
 from app.integrations.rabbitmq.publisher import RabbitEventPublisher
 from app.resilience.circuit_breaker import CircuitBreaker
 from app.services.outbox_relay import OutboxRelay
+from app.services.payment_reconciliation import PaymentReconciliationWorker
 from app.worker.consumer import PaymentQueueConsumer
 from app.worker.dispatcher import WorkerEventDispatcher
 from app.worker.payment_processor import PaymentEventProcessor
@@ -102,8 +103,21 @@ async def run_worker(shutdown_event: asyncio.Event) -> None:
         poll_interval_seconds=(settings.outbox_relay_poll_interval_seconds),
     )
 
-    outbox_stop_event = asyncio.Event()
+    background_stop_event = asyncio.Event()
+
     outbox_task: asyncio.Task[None] | None = None
+    reconciliation_task: asyncio.Task[None] | None = None
+
+    reconciliation_worker = PaymentReconciliationWorker(
+        session_factory=database.session_factory,
+        provider_client=provider_client,
+        circuit_breaker=circuit_breaker,
+        batch_size=settings.payment_reconciliation_batch_size,
+        stale_after_seconds=(settings.payment_reconciliation_stale_after_seconds),
+        poll_interval_seconds=(settings.payment_reconciliation_poll_interval_seconds),
+        lease_seconds=settings.payment_reconciliation_lease_seconds,
+        max_attempts=settings.payment_reconciliation_max_attempts,
+    )
 
     broker_connected = False
     broker_started = False
@@ -120,11 +134,20 @@ async def run_worker(shutdown_event: asyncio.Event) -> None:
         broker_started = True
 
         outbox_task = asyncio.create_task(
-            outbox_relay.run(outbox_stop_event),
+            outbox_relay.run(background_stop_event),
             name="outbox-relay",
         )
 
-        outbox_task.add_done_callback(lambda _: shutdown_event.set())
+        reconciliation_task = asyncio.create_task(
+            reconciliation_worker.run(background_stop_event),
+            name="payment-reconciliation",
+        )
+
+        def request_shutdown(_task: asyncio.Task[None]) -> None:
+            shutdown_event.set()
+
+        outbox_task.add_done_callback(request_shutdown)
+        reconciliation_task.add_done_callback(request_shutdown)
 
         logger.info(
             "worker_started",
@@ -136,11 +159,17 @@ async def run_worker(shutdown_event: asyncio.Event) -> None:
         if outbox_task.done():
             await outbox_task
 
+        if reconciliation_task.done():
+            await reconciliation_task
+
     finally:
-        outbox_stop_event.set()
+        background_stop_event.set()
 
         if outbox_task is not None and not outbox_task.done():
             await outbox_task
+
+        if reconciliation_task is not None and not reconciliation_task.done():
+            await reconciliation_task
 
         if broker_started or broker_connected:
             with suppress(Exception):

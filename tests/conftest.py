@@ -19,5 +19,10 @@ def settings() -> Settings:
             "webhook_request_timeout_seconds": 5.0,
             "payment_provider_circuit_breaker_failure_threshold": 5,
             "payment_provider_circuit_breaker_recovery_timeout_seconds": 15.0,
+            "payment_reconciliation_batch_size": 20,
+            "payment_reconciliation_stale_after_seconds": 30.0,
+            "payment_reconciliation_poll_interval_seconds": 5.0,
+            "payment_reconciliation_lease_seconds": 60.0,
+            "payment_reconciliation_max_attempts": 5,
         }
     )

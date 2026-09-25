@@ -50,6 +50,12 @@ class Settings(BaseSettings):
 
     webhook_request_timeout_seconds: float = Field(default=5.0, gt=0)
 
+    payment_reconciliation_batch_size: int = Field(default=20, ge=1)
+    payment_reconciliation_stale_after_seconds: float = Field(default=30.0, ge=0)
+    payment_reconciliation_poll_interval_seconds: float = Field(default=5.0, gt=0)
+    payment_reconciliation_lease_seconds: float = Field(default=60.0, gt=0)
+    payment_reconciliation_max_attempts: int = Field(default=5, ge=1)
+
 
 @lru_cache
 def get_settings() -> Settings:
