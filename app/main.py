@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 import structlog
 from fastapi import FastAPI
 
+from app.api.router import router
 from app.core.config import get_settings
 from app.core.database import Database
 from app.core.logging import configure_logging
@@ -51,3 +52,4 @@ app = FastAPI(
 )
 
 app.middleware("http")(request_id_middleware)
+app.include_router(router)
