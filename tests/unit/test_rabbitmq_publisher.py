@@ -70,3 +70,76 @@ async def test_publish_propagates_broker_error() -> None:
         match="publish timed out",
     ):
         await publisher.publish(event)
+
+
+async def test_publish_retry_routes_second_attempt_to_first_retry_queue() -> None:
+    broker = MagicMock(spec=RabbitBroker)
+    broker.publish = AsyncMock()
+
+    publisher = RabbitEventPublisher(
+        broker,
+        timeout_seconds=5.0,
+    )
+
+    event = make_event().model_copy(
+        update={"attempt": 2},
+    )
+
+    await publisher.publish_retry(event)
+
+    broker.publish.assert_awaited_once_with(
+        event.model_dump(mode="json"),
+        exchange=PAYMENTS_EXCHANGE,
+        routing_key="payments.retry.1",
+        mandatory=True,
+        persist=True,
+        timeout=5.0,
+        message_id=str(EVENT_ID),
+        correlation_id=str(PAYMENT_ID),
+        message_type="payment.process_requested",
+    )
+
+
+async def test_publish_retry_routes_third_attempt_to_second_retry_queue() -> None:
+    broker = MagicMock(spec=RabbitBroker)
+    broker.publish = AsyncMock()
+
+    publisher = RabbitEventPublisher(
+        broker,
+        timeout_seconds=5.0,
+    )
+
+    event = make_event().model_copy(
+        update={"attempt": 3},
+    )
+
+    await publisher.publish_retry(event)
+
+    broker.publish.assert_awaited_once_with(
+        event.model_dump(mode="json"),
+        exchange=PAYMENTS_EXCHANGE,
+        routing_key="payments.retry.2",
+        mandatory=True,
+        persist=True,
+        timeout=5.0,
+        message_id=str(EVENT_ID),
+        correlation_id=str(PAYMENT_ID),
+        message_type="payment.process_requested",
+    )
+
+
+async def test_publish_retry_rejects_invalid_attempt() -> None:
+    broker = MagicMock(spec=RabbitBroker)
+
+    publisher = RabbitEventPublisher(
+        broker,
+        timeout_seconds=5.0,
+    )
+
+    event = make_event()
+
+    with pytest.raises(
+        ValueError,
+        match="Retry event attempt must be 2 or 3",
+    ):
+        await publisher.publish_retry(event)
