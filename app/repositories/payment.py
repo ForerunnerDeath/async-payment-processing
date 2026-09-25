@@ -33,3 +33,16 @@ class PaymentRepository:
         await self._session.flush()
 
         return payment
+
+    async def get_by_id_for_update(self, payment_id: UUID) -> Payment | None:
+        statement = (
+            select(Payment)
+            .where(
+                Payment.id == payment_id,
+            )
+            .with_for_update()
+        )
+
+        result = await self._session.execute(statement)
+
+        return result.scalar_one_or_none()
