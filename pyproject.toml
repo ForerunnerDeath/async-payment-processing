@@ -1,0 +1,41 @@
+[project]
+name = "async-payment-processing"
+version = "0.1.0"
+description = "Asynchronous payment processing service with RabbitMQ, transactional outbox, webhooks and reconciliation"
+requires-python = ">=3.14,<3.15"
+dependencies = [
+    "fastapi (>=0.141,<0.142)",
+    "uvicorn[standard] (>=0.53,<0.54)",
+    "pydantic (>=2.13,<3.0)",
+    "pydantic-settings (>=2.15,<3.0)",
+    "sqlalchemy[asyncio] (>=2.0.54,<2.1)",
+    "asyncpg (>=0.31,<0.32)",
+    "alembic (>=1.20,<2.0)",
+    "faststream[rabbit] (>=0.7.6,<0.8)",
+    "httpx (>=0.28,<0.29)",
+    "structlog (>=26.1,<27.0)",
+]
+
+[tool.poetry]
+package-mode = false
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^9.1"
+pytest-asyncio = "^1.4"
+pytest-cov = "^7.1"
+ruff = "^0.16.9"
+pyright = "^1.1.414"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"
+
+[tool.pyright]
+include = ["app", "tests"]
+typeCheckingMode = "strict"
+venvPath = "."
+venv = ".venv"
+pythonVersion = "3.14"
