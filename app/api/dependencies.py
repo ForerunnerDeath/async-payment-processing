@@ -1,7 +1,9 @@
+from collections.abc import AsyncGenerator
 from secrets import compare_digest
 from typing import Annotated, cast
 
 from fastapi import Header, HTTPException, Request, status
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
 from app.core.database import Database
@@ -13,6 +15,13 @@ def get_settings(request: Request) -> Settings:
 
 def get_database(request: Request) -> Database:
     return cast(Database, request.app.state.database)
+
+
+async def get_session(request: Request) -> AsyncGenerator[AsyncSession]:
+    database = get_database(request)
+
+    async with database.session_factory() as session:
+        yield session
 
 
 def verify_api_key(
