@@ -3,7 +3,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import AmqpDsn, Field, PostgresDsn, SecretStr
+from pydantic import AmqpDsn, AnyHttpUrl, Field, PostgresDsn, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_DIR = Path(__file__).resolve().parents[2]
@@ -36,6 +36,14 @@ class Settings(BaseSettings):
         extra="ignore",
         frozen=True,
     )
+
+    payment_provider_url: AnyHttpUrl
+
+    payment_provider_request_timeout_seconds: float = Field(default=6.0, gt=0)
+    payment_provider_max_attempts: int = Field(default=3, ge=1, le=10)
+    payment_provider_retry_base_delay_seconds: float = Field(default=0.2, ge=0)
+    payment_provider_retry_max_delay_seconds: float = Field(default=1.0, ge=0)
+    payment_provider_retry_total_timeout_seconds: float = Field(default=10.0, gt=0)
 
 
 @lru_cache
