@@ -9,5 +9,6 @@ def settings() -> Settings:
         {
             "api_key": "test-api-key",
             "database_url": ("postgresql+asyncpg://payments:payments@localhost:5432/payments"),
+            "rabbitmq_url": "amqp://payments:payments@localhost:5672/",
         }
     )

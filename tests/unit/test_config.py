@@ -8,6 +8,7 @@ def make_settings(**overrides: object) -> Settings:
     data: dict[str, object] = {
         "api_key": "test-api-key",
         "database_url": ("postgresql+asyncpg://payments:payments@localhost:5432/payments"),
+        "rabbitmq_url": "amqp://payments:payments@localhost:5672/",
     }
     data.update(overrides)
 
@@ -20,6 +21,9 @@ def test_settings_have_expected_defaults() -> None:
     assert settings.app_name == "Async Payment Processing"
     assert settings.environment is Environment.LOCAL
     assert settings.log_level == "INFO"
+    assert settings.outbox_relay_batch_size == 100
+    assert settings.outbox_relay_poll_interval_seconds == 1.0
+    assert settings.rabbit_publish_timeout_seconds == 5.0
 
 
 def test_api_key_is_hidden_from_settings_repr() -> None:

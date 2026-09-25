@@ -3,7 +3,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import PostgresDsn, SecretStr
+from pydantic import AmqpDsn, Field, PostgresDsn, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_DIR = Path(__file__).resolve().parents[2]
@@ -22,6 +22,12 @@ class Settings(BaseSettings):
 
     api_key: SecretStr
     database_url: PostgresDsn
+
+    rabbitmq_url: AmqpDsn
+
+    outbox_relay_batch_size: int = Field(default=100, ge=1, le=1000)
+    outbox_relay_poll_interval_seconds: float = Field(default=1.0, gt=0)
+    rabbit_publish_timeout_seconds: float = Field(default=5.0, gt=0)
 
     model_config = SettingsConfigDict(
         env_file=PROJECT_DIR / ".env",
