@@ -4,10 +4,12 @@ from dataclasses import dataclass
 from typing import Annotated
 from uuid import UUID, uuid4
 
-from fastapi import FastAPI, Header, HTTPException, status
+from fastapi import FastAPI, Header, HTTPException, Response, status
 from fastapi.responses import JSONResponse
 
-from app.schemas import (
+from .schemas import (
+    CapturedWebhook,
+    CapturedWebhookPayload,
     MockScenario,
     ProcessPaymentRequest,
     ProcessPaymentResponse,
@@ -30,6 +32,8 @@ class IdempotencyLockEntry:
 
 _idempotency_records: dict[UUID, IdempotencyRecord] = {}
 _idempotency_locks: dict[UUID, IdempotencyLockEntry] = {}
+_default_scenario: MockScenario | None = None
+_captured_webhooks: dict[str, list[CapturedWebhook]] = {}
 
 
 app = FastAPI(
@@ -43,13 +47,84 @@ async def live() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.get(
-    "/payments/by-idempotency-key/{idempotency_key}",
-    response_model=ProcessPaymentResponse,
-)
-async def get_payment_by_idempotency_key(
-    idempotency_key: UUID,
-) -> ProcessPaymentResponse:
+@app.put("/test/scenario/{scenario}")
+async def set_default_scenario(scenario: MockScenario) -> dict[str, str]:
+    global _default_scenario
+
+    _default_scenario = scenario
+
+    return {
+        "scenario": scenario.value,
+    }
+
+
+@app.delete("/test/scenario", status_code=status.HTTP_204_NO_CONTENT)
+async def clear_default_scenario() -> Response:
+    global _default_scenario
+
+    _default_scenario = None
+
+    return Response(
+        status_code=status.HTTP_204_NO_CONTENT,
+    )
+
+
+@app.post("/test/webhooks/{capture_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def capture_webhook(
+    capture_id: str,
+    payload: CapturedWebhookPayload,
+    webhook_id: Annotated[
+        UUID,
+        Header(alias="X-Webhook-Id"),
+    ],
+    attempt: Annotated[
+        int,
+        Header(
+            alias="X-Webhook-Attempt",
+            ge=1,
+        ),
+    ],
+) -> Response:
+    delivery = CapturedWebhook(
+        payload=payload,
+        webhook_id=webhook_id,
+        attempt=attempt,
+    )
+
+    _captured_webhooks.setdefault(
+        capture_id,
+        [],
+    ).append(delivery)
+
+    return Response(
+        status_code=status.HTTP_204_NO_CONTENT,
+    )
+
+
+@app.get("/test/webhooks/{capture_id}", response_model=list[CapturedWebhook])
+async def get_captured_webhooks(capture_id: str) -> list[CapturedWebhook]:
+    return list(
+        _captured_webhooks.get(
+            capture_id,
+            [],
+        )
+    )
+
+
+@app.delete("/test/webhooks/{capture_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def clear_captured_webhooks(capture_id: str) -> Response:
+    _captured_webhooks.pop(
+        capture_id,
+        None,
+    )
+
+    return Response(
+        status_code=status.HTTP_204_NO_CONTENT,
+    )
+
+
+@app.get("/payments/by-idempotency-key/{idempotency_key}", response_model=ProcessPaymentResponse)
+async def get_payment_by_idempotency_key(idempotency_key: UUID) -> ProcessPaymentResponse:
     record = _idempotency_records.get(idempotency_key)
 
     if record is None:
@@ -61,10 +136,7 @@ async def get_payment_by_idempotency_key(
     return record.response
 
 
-@app.post(
-    "/process-payment",
-    response_model=ProcessPaymentResponse,
-)
+@app.post("/process-payment", response_model=ProcessPaymentResponse)
 async def process_payment(
     payment: ProcessPaymentRequest,
     idempotency_key: Annotated[
@@ -82,13 +154,15 @@ async def process_payment(
             detail="Idempotency-Key must match payment_id",
         )
 
-    if mock_scenario is MockScenario.ERROR_BEFORE_PROCESSING:
+    effective_scenario = mock_scenario if mock_scenario is not None else _default_scenario
+
+    if effective_scenario is MockScenario.ERROR_BEFORE_PROCESSING:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Mock provider unavailable before processing",
         )
 
-    if mock_scenario is MockScenario.TIMEOUT_BEFORE_PROCESSING:
+    if effective_scenario is MockScenario.TIMEOUT_BEFORE_PROCESSING:
         await asyncio.sleep(TIMEOUT_SCENARIO_DELAY_SECONDS)
 
         raise HTTPException(
@@ -96,7 +170,7 @@ async def process_payment(
             detail="Mock provider timed out before processing",
         )
 
-    if mock_scenario is None:
+    if effective_scenario is None:
         await asyncio.sleep(
             random.uniform(2.0, 5.0),
         )
@@ -131,9 +205,9 @@ async def process_payment(
 
                 return existing_record.response
 
-            if mock_scenario is MockScenario.DECLINED:
+            if effective_scenario is MockScenario.DECLINED:
                 provider_status = "declined"
-            elif mock_scenario in (
+            elif effective_scenario in (
                 MockScenario.APPROVED,
                 MockScenario.TIMEOUT_AFTER_PROCESSING,
                 MockScenario.MALFORMED_RESPONSE,
@@ -152,8 +226,8 @@ async def process_payment(
                 response=response,
             )
 
-            should_delay_response = mock_scenario is MockScenario.TIMEOUT_AFTER_PROCESSING
-            should_return_malformed_response = mock_scenario is MockScenario.MALFORMED_RESPONSE
+            should_delay_response = effective_scenario is MockScenario.TIMEOUT_AFTER_PROCESSING
+            should_return_malformed_response = effective_scenario is MockScenario.MALFORMED_RESPONSE
     finally:
         lock_entry.users -= 1
 

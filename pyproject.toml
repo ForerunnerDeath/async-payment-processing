@@ -34,6 +34,7 @@ pythonpath = ["."]
 addopts = "-q"
 markers = [
     "integration: tests that require PostgreSQL",
+    "e2e: black-box tests that require the full Docker Compose stack",
 ]
 
 [tool.pyright]

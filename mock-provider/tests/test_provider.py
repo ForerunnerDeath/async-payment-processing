@@ -252,3 +252,103 @@ async def test_idempotency_key_must_match_payment_id(
         )
 
     assert response.status_code == 422
+
+
+async def test_default_scenario_is_used_without_mock_header(
+    provider_module: ModuleType,
+) -> None:
+    payment_id = uuid4()
+
+    async with create_client(provider_module) as client:
+        scenario_response = await client.put(
+            "/test/scenario/declined",
+        )
+
+        response = await client.post(
+            "/process-payment",
+            json=make_payload(str(payment_id)),
+            headers={
+                "Idempotency-Key": str(payment_id),
+            },
+        )
+
+    assert scenario_response.status_code == 200
+    assert scenario_response.json() == {
+        "scenario": "declined",
+    }
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "declined"
+
+
+async def test_mock_header_overrides_default_scenario(
+    provider_module: ModuleType,
+) -> None:
+    payment_id = uuid4()
+
+    async with create_client(provider_module) as client:
+        await client.put(
+            "/test/scenario/declined",
+        )
+
+        response = await client.post(
+            "/process-payment",
+            json=make_payload(str(payment_id)),
+            headers={
+                "Idempotency-Key": str(payment_id),
+                "X-Mock-Scenario": "approved",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "approved"
+
+
+async def test_webhook_capture_records_payload_and_delivery_headers(
+    provider_module: ModuleType,
+) -> None:
+    payment_id = uuid4()
+    event_id = uuid4()
+
+    payload = {
+        "event_id": str(event_id),
+        "event_type": "payment.succeeded",
+        "payment_id": str(payment_id),
+        "status": "succeeded",
+        "amount": "1500.50",
+        "currency": "RUB",
+        "processed_at": "2026-09-26T08:00:00Z",
+        "metadata": {
+            "order_id": "e2e-123",
+        },
+    }
+
+    async with create_client(provider_module) as client:
+        capture_response = await client.post(
+            "/test/webhooks/payment-e2e",
+            json=payload,
+            headers={
+                "X-Webhook-Id": str(event_id),
+                "X-Webhook-Attempt": "1",
+            },
+        )
+
+        captured_response = await client.get(
+            "/test/webhooks/payment-e2e",
+        )
+
+    assert capture_response.status_code == 204
+    assert captured_response.status_code == 200
+
+    captured = captured_response.json()
+
+    assert len(captured) == 1
+
+    assert captured[0]["webhook_id"] == str(event_id)
+    assert captured[0]["attempt"] == 1
+    assert captured[0]["payload"]["payment_id"] == str(payment_id)
+    assert captured[0]["payload"]["event_type"] == "payment.succeeded"
+    assert captured[0]["payload"]["status"] == "succeeded"
+    assert captured[0]["payload"]["metadata"] == {
+        "order_id": "e2e-123",
+    }
