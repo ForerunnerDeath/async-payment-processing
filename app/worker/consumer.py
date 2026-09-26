@@ -60,17 +60,46 @@ class PaymentQueueConsumer:
                 payment_id=str(event.payment_id),
                 attempt=event.attempt,
             )
+            await self._retry_or_reject(event, message)
 
-            if event.attempt >= self.MAX_ATTEMPTS:
-                await message.reject()
+            return
 
-                return
+        except Exception:
+            self._logger.exception(
+                "rabbit_event_unexpected_failure",
+                event_id=str(event.event_id),
+                event_type=event.event_type.value,
+                payment_id=str(event.payment_id),
+                attempt=event.attempt,
+            )
 
-            retry_event = event.model_copy(update={"attempt": event.attempt + 1})
+            await self._retry_or_reject(event, message)
 
+            return
+
+        await message.ack()
+
+    async def _retry_or_reject(self, event: EventEnvelope, message: RabbitMessage) -> None:
+        if event.attempt >= self.MAX_ATTEMPTS:
+            await message.reject()
+
+            return
+
+        retry_event = event.model_copy(update={"attempt": event.attempt + 1})
+
+        try:
             await self._publisher.publish_retry(retry_event)
+        except Exception:
+            self._logger.exception(
+                "rabbit_retry_publish_failed",
+                event_id=str(event.event_id),
+                event_type=event.event_type.value,
+                payment_id=str(event.payment_id),
+                attempt=event.attempt,
+                next_attempt=retry_event.attempt,
+            )
 
-            await message.ack()
+            await message.nack()
 
             return
 
