@@ -15,7 +15,7 @@ concurrency:
 jobs:
   app:
     name: App checks
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     env:
       POETRY_VIRTUALENVS_IN_PROJECT: "true"
@@ -64,10 +64,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.14"
 
@@ -98,7 +98,7 @@ jobs:
 
   mock-provider:
     name: Mock provider checks
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     env:
       POETRY_VIRTUALENVS_IN_PROJECT: "true"
@@ -109,10 +109,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.14"
 
@@ -140,7 +140,7 @@ jobs:
 
   e2e:
     name: Docker E2E
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     needs:
       - app
@@ -151,10 +151,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.14"
 

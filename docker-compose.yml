@@ -28,6 +28,13 @@ x-app-environment: &app-environment
   PAYMENT_RECONCILIATION_LEASE_SECONDS: ${PAYMENT_RECONCILIATION_LEASE_SECONDS:-60}
   PAYMENT_RECONCILIATION_MAX_ATTEMPTS: ${PAYMENT_RECONCILIATION_MAX_ATTEMPTS:-5}
 
+
+x-app-image: &app-image
+  build:
+    context: .
+    dockerfile: Dockerfile
+  image: async-payment-processing:dev
+
 services:
   postgres:
     image: postgres:17-alpine
@@ -97,10 +104,7 @@ services:
       start_period: 5s
 
   migrations:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: async-payment-processing:dev
+    <<: *app-image
     container_name: async-payment-processing-migrations
     environment: *app-environment
     command:
@@ -115,7 +119,7 @@ services:
         condition: service_healthy
 
   api:
-    image: async-payment-processing:dev
+    <<: *app-image
     container_name: async-payment-processing-api
     environment: *app-environment
     command:
@@ -150,7 +154,7 @@ services:
         condition: service_completed_successfully
 
   consumer:
-    image: async-payment-processing:dev
+    <<: *app-image
     container_name: async-payment-processing-consumer
     environment: *app-environment
     command:
