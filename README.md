@@ -295,11 +295,32 @@ Mock provider включён в Docker Compose и имитирует внешн�
 
 Provider client различает безопасные для повторения и неоднозначные ошибки.
 
+Безопасные HTTP retry используют exponential backoff с full jitter, поддерживают `Retry-After` для `429/503` и ограничены общим retry time budget.
+
 Например:
 
 - connection failure до подтверждённой отправки может быть retryable;
 - timeout/read/write/protocol failure после возможной отправки POST считается ambiguous;
 - ambiguous outcome не приводит к слепому повторению опасной операции, а переводит платеж во внутренний `unknown`.
+
+
+## Circuit Breaker
+
+Вызовы payment provider дополнительно защищены Circuit Breaker со состояниями:
+
+`CLOSED -> OPEN -> HALF_OPEN -> CLOSED`
+
+По умолчанию breaker открывается после 5 последовательных provider failures и через 15 секунд разрешает пробный вызов.
+
+Ошибки недоступности и неоднозначные provider failures учитываются как failures Circuit Breaker. Детерминированный permanent response провайдера не считается outage и не открывает breaker.
+
+Если Circuit Breaker открыт, новый HTTP-вызов к provider не выполняется, а событие считается retryable и проходит через обычный RabbitMQ retry flow.
+
+Параметры:
+
+- `PAYMENT_PROVIDER_CIRCUIT_BREAKER_FAILURE_THRESHOLD`
+- `PAYMENT_PROVIDER_CIRCUIT_BREAKER_RECOVERY_TIMEOUT_SECONDS`
+
 
 ## Reconciliation
 
@@ -556,6 +577,9 @@ docker-compose.e2e.yml
 - database locking для конкурентных изменений состояния;
 - reconciliation leases;
 - HTTP-вызовы выполняются вне database transaction;
+- Circuit Breaker для защиты provider integration при серии сбоев;
+- structured JSON logging через `structlog`;
+- request correlation через `X-Request-ID`;
 - at-least-once delivery как осознанная модель.
 
 ## Ограничения и допущения
