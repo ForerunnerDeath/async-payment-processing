@@ -1,0 +1,207 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  app:
+    name: App checks
+    runs-on: ubuntu-latest
+
+    env:
+      POETRY_VIRTUALENVS_IN_PROJECT: "true"
+
+      ENVIRONMENT: test
+      API_KEY: ci-api-key
+
+      DATABASE_URL: postgresql+asyncpg://payments:payments@127.0.0.1:5432/payments
+      RABBITMQ_URL: amqp://payments:payments@127.0.0.1:5672/
+
+      PAYMENT_PROVIDER_URL: http://127.0.0.1:8001
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+
+        env:
+          POSTGRES_DB: payments
+          POSTGRES_USER: payments
+          POSTGRES_PASSWORD: payments
+
+        ports:
+          - 5432:5432
+
+        options: >-
+          --health-cmd "pg_isready -U payments -d payments"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+      rabbitmq:
+        image: rabbitmq:4-management-alpine
+
+        env:
+          RABBITMQ_DEFAULT_USER: payments
+          RABBITMQ_DEFAULT_PASS: payments
+
+        ports:
+          - 5672:5672
+
+        options: >-
+          --health-cmd "rabbitmq-diagnostics -q ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install Poetry
+        run: python -m pip install "poetry==2.2.1"
+
+      - name: Install dependencies
+        run: poetry install --no-interaction --no-ansi
+
+      - name: Validate Poetry files
+        run: poetry check --lock
+
+      - name: Apply migrations
+        run: poetry run alembic upgrade head
+
+      - name: Ruff
+        run: poetry run ruff check .
+
+      - name: Ruff format
+        run: poetry run ruff format --check .
+
+      - name: Pyright
+        run: poetry run pyright
+
+      - name: Tests
+        run: poetry run pytest
+
+
+  mock-provider:
+    name: Mock provider checks
+    runs-on: ubuntu-latest
+
+    env:
+      POETRY_VIRTUALENVS_IN_PROJECT: "true"
+
+    defaults:
+      run:
+        working-directory: mock-provider
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install Poetry
+        run: python -m pip install "poetry==2.2.1"
+
+      - name: Install dependencies
+        run: poetry install --no-interaction --no-ansi
+
+      - name: Validate Poetry files
+        run: poetry check --lock
+
+      - name: Ruff
+        run: poetry run ruff check .
+
+      - name: Ruff format
+        run: poetry run ruff format --check .
+
+      - name: Pyright
+        run: poetry run pyright
+
+      - name: Tests
+        run: poetry run pytest
+
+
+  e2e:
+    name: Docker E2E
+    runs-on: ubuntu-latest
+
+    needs:
+      - app
+      - mock-provider
+
+    env:
+      POETRY_VIRTUALENVS_IN_PROJECT: "true"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install Poetry
+        run: python -m pip install "poetry==2.2.1"
+
+      - name: Install test dependencies
+        run: poetry install --no-interaction --no-ansi
+
+      - name: Validate Compose configuration
+        run: |
+          docker compose \
+            -f docker-compose.yml \
+            -f docker-compose.e2e.yml \
+            config
+
+      - name: Start E2E stack
+        run: |
+          docker compose \
+            -f docker-compose.yml \
+            -f docker-compose.e2e.yml \
+            up --build -d --wait --wait-timeout 180
+
+      - name: Show stack status
+        run: |
+          docker compose \
+            -f docker-compose.yml \
+            -f docker-compose.e2e.yml \
+            ps
+
+      - name: Run E2E tests
+        env:
+          RUN_E2E: "1"
+        run: poetry run pytest tests/e2e -q
+
+      - name: Show Docker logs on failure
+        if: failure()
+        run: |
+          docker compose \
+            -f docker-compose.yml \
+            -f docker-compose.e2e.yml \
+            logs --no-color
+
+      - name: Stop E2E stack
+        if: always()
+        run: |
+          docker compose \
+            -f docker-compose.yml \
+            -f docker-compose.e2e.yml \
+            down -v --remove-orphans
