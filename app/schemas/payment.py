@@ -6,7 +6,6 @@ from uuid import UUID
 from pydantic import (
     AnyHttpUrl,
     BaseModel,
-    ConfigDict,
     Field,
     field_validator,
 )
@@ -18,6 +17,21 @@ class Currency(StrEnum):
     RUB = "RUB"
     USD = "USD"
     EUR = "EUR"
+
+
+class PublicPaymentStatus(StrEnum):
+    PENDING = "pending"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+
+
+def to_public_payment_status(status: PaymentStatus | str) -> PublicPaymentStatus:
+    internal_status = PaymentStatus(status)
+
+    if internal_status is PaymentStatus.UNKNOWN:
+        return PublicPaymentStatus.PENDING
+
+    return PublicPaymentStatus(internal_status.value)
 
 
 class PaymentCreate(BaseModel):
@@ -33,10 +47,7 @@ class PaymentCreate(BaseModel):
 
     @field_validator("webhook_url")
     @classmethod
-    def validate_webhook_url(
-        cls,
-        value: AnyHttpUrl,
-    ) -> AnyHttpUrl:
+    def validate_webhook_url(cls, value: AnyHttpUrl) -> AnyHttpUrl:
         if value.username is not None or value.password is not None:
             raise ValueError("webhook_url must not contain credentials")
 
@@ -45,23 +56,17 @@ class PaymentCreate(BaseModel):
 
 class PaymentAccepted(BaseModel):
     payment_id: UUID
-    status: PaymentStatus
+    status: PublicPaymentStatus
     created_at: datetime
 
 
 class PaymentDetail(BaseModel):
-    model_config = ConfigDict(
-        from_attributes=True,
-    )
-
-    payment_id: UUID = Field(validation_alias="id")
+    payment_id: UUID
     amount: Decimal
     currency: Currency
     description: str | None
-    metadata: dict[str, object] = Field(
-        validation_alias="payment_metadata",
-    )
-    status: PaymentStatus
+    metadata: dict[str, object]
+    status: PublicPaymentStatus
     idempotency_key: str
     webhook_url: AnyHttpUrl
     created_at: datetime

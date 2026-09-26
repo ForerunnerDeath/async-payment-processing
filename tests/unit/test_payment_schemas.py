@@ -3,7 +3,13 @@ from decimal import Decimal
 import pytest
 from pydantic import ValidationError
 
-from app.schemas.payment import Currency, PaymentCreate
+from app.models.payment import PaymentStatus
+from app.schemas.payment import (
+    Currency,
+    PaymentCreate,
+    PublicPaymentStatus,
+    to_public_payment_status,
+)
 
 
 def make_payment_data(**overrides: object) -> dict[str, object]:
@@ -82,3 +88,21 @@ def test_payment_create_uses_independent_metadata_defaults() -> None:
     first.metadata["payment"] = "first"
 
     assert second.metadata == {}
+
+
+@pytest.mark.parametrize(
+    ("internal_status", "expected"),
+    [
+        (PaymentStatus.PENDING, PublicPaymentStatus.PENDING),
+        ("pending", PublicPaymentStatus.PENDING),
+        (PaymentStatus.SUCCEEDED, PublicPaymentStatus.SUCCEEDED),
+        ("failed", PublicPaymentStatus.FAILED),
+        (PaymentStatus.UNKNOWN, PublicPaymentStatus.PENDING),
+        ("unknown", PublicPaymentStatus.PENDING),
+    ],
+)
+def test_to_public_payment_status_accepts_enum_and_database_string(
+    internal_status: PaymentStatus | str,
+    expected: PublicPaymentStatus,
+) -> None:
+    assert to_public_payment_status(internal_status) is expected

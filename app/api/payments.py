@@ -2,10 +2,17 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
+from pydantic import AnyHttpUrl
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import get_session, verify_api_key
-from app.schemas.payment import PaymentAccepted, PaymentCreate, PaymentDetail
+from app.schemas.payment import (
+    Currency,
+    PaymentAccepted,
+    PaymentCreate,
+    PaymentDetail,
+    to_public_payment_status,
+)
 from app.services.payment import IdempotencyConflictError, PaymentService
 from app.services.payment_query import PaymentQueryService
 
@@ -52,7 +59,7 @@ async def create_payment(
 
     return PaymentAccepted(
         payment_id=result.payment.id,
-        status=result.payment.status,
+        status=to_public_payment_status(result.payment.status),
         created_at=result.payment.created_at,
     )
 
@@ -72,4 +79,15 @@ async def get_payment(
             detail="Payment not found",
         )
 
-    return PaymentDetail.model_validate(payment)
+    return PaymentDetail(
+        payment_id=payment.id,
+        amount=payment.amount,
+        currency=Currency(payment.currency),
+        description=payment.description,
+        metadata=payment.payment_metadata,
+        status=to_public_payment_status(payment.status),
+        idempotency_key=payment.idempotency_key,
+        webhook_url=AnyHttpUrl(payment.webhook_url),
+        created_at=payment.created_at,
+        processed_at=payment.processed_at,
+    )
